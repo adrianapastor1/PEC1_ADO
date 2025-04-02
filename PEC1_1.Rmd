@@ -1,0 +1,225 @@
+---
+title: "CACHEXIA"
+author: "Adriana Pastor"
+date: "2025-04-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+library(tidyverse)
+library(SummarizedExperiment)
+library(factoextra)
+library(plotly)
+```
+
+---
+1. INTRODUCCIÓN
+2. MATERIALES Y MÉTODOS
+3. RESULTADOS
+4. DISCUSION Y LIMITACIONES
+5. REFERENCIAS
+---
+
+## INTRODUCCIÓN
+
+El objetivo de esta actividad es realizar un análisis exploratorio de muestras de pacientes con caquexia y controles, con el fin de analizar la expresión de distintos metabolitos.
+
+En primer lugar, se creará el objeto *SummarizedExperiment* para trabajar con los datos. El beneficio de utilizar este tipo de objeto es que, basándonos en un modelo, podemos separar los metadatos de los datos numéricos, lo que facilita el manejo de datos grandes y complejos de manera mucho más sencilla.
+
+Es útil utilizar esta extensión de la clase *ExpressionSet*. En ambos casos, podemos manejar datos de alta dimensión, como es el caso en este estudio. *SummarizedExperiment* está diseñado de manera que resulta más flexible y general. Permite trabajar con cualquier tipo de datos, como metabolómicos, proteómicos, transcriptómicos, entre otros, y agregar diversos *assays* (tipos de datos) al mismo objeto.
+
+Además, las diferencias en la forma en que se almacena la información permiten una mayor flexibilidad, sin limitarse a un solo tipo de datos o características.
+
+## MATERIALES Y MÉTODOS
+
+Los datos utilizados se obtuvieron del repositorio de GitHub *Datasets/2024-Cachexia*:\
+<https://github.com/nutrimetabolomics/metaboData/tree/main/Datasets/2024-Cachexia>.
+
+Como metodología, realizaremos un **análisis de componentes principales (PCA)** y un **análisis de clustering**.
+
+### **2.1 Carga y procesamiento de los datos**
+
+En primer lugar, cargamos los datos y convertimos la variable *Muscle loss* en un factor:
+
+```{r}
+caquexia_1 <- read_csv("C:/Users/Adria/Desktop/ADO/PEC1/human_cachexia.csv") %>% as.data.frame
+str(caquexia_1)
+
+caquexia_1$`Muscle loss` <- factor(caquexia_1$`Muscle loss`) #Convertimos a factor
+```
+
+A continuación, extraemos las columnas de mediciones, manteniendo únicamente aquellas que contienen datos numéricos de interés. También creamos un nuevo *data frame* con las columnas *Patient ID* y *Muscle loss*, que utilizaremos como metadatos:
+
+```{r}
+# Primero, seleccionamos las columnas numéricas de interés
+exp_data <- caquexia_1[, -c(1, 2)] 
+
+# Asignar los nombres de las filas
+rownames(exp_data) <- caquexia_1$`Patient ID`
+
+
+# Crear un nuevo DataFrame extrayendo dos columnas
+colData <- caquexia_1[, c("Patient ID", "Muscle loss")]
+```
+
+Dado que los datos generalmente deben estar organizados con las muestras en las filas y las variables (metabolitos, genes, etc.) en las columnas, es necesario transponer la matriz de datos antes de realizar el Análisis de Componentes Principales (PCA).
+
+```{r}
+# traslocamos para que cuadren las filas y las coumnas
+exp_data_t <- t(as.matrix(exp_data))
+```
+
+Finalmente, organizamos los datos en un objeto `SummarizedExperiment`, lo que nos permite almacenar conjuntamente las mediciones y los metadatos, facilitando su análisis en estudios de expresión génica o metabólica.
+
+```{r}
+
+# Crear el objeto SummarizedExperiment
+se <- SummarizedExperiment(assays = list(counts = exp_data_t), colData = colData)
+
+# Verificar la estructura del objeto SummarizedExperiment
+se
+
+
+
+```
+
+### **2.2 Análisis de Componentes Principales (PCA)**
+
+Existe una variación muy amplia en el rango de valores de las variables, como podemos observar. Para homogeneizar la escala de los datos, aplicamos una transformación logarítmica antes de realizar el **Análisis de Componentes Principales (PCA)** utilizando la función `prcomp()`.
+
+Esto permite minimizar la influencia de los valores extremos y mejorar la interpretación de los componentes principales.
+
+```{r}
+summary(as.vector(t(assays(se)$counts)))
+```
+
+### 
+
+```{r}
+# Realizar el PCA
+pca_result <- prcomp(log(t(assays(se)$counts) + 1), scale=TRUE)
+```
+
+Para determinar cuántos componentes principales son relevantes para nuestro análisis, realizamos un gráfico de la **varianza explicada acumulada**, también conocido como **método del codo**.
+
+Este gráfico nos permite identificar el punto en el que agregar más componentes no aporta una ganancia significativa en la variabilidad explicada. En nuestro caso, observamos que los **componentes principales 1 y 2** capturan la mayor parte de la variabilidad de los datos, por lo que nos enfocaremos en ellos para continuar con el análisis.
+
+```{r}
+fviz_eig(pca_result)
+```
+
+Este resultado justifica la selección de los **primeros dos componentes principales (PC1 y PC2)** para la visualización y análisis posterior.
+
+```{r}
+# Seleccionar los primeros 2 componentes principales 
+dat.sel <- pca_result$x[, 1:2]
+```
+
+### 2.3 Diferenciación de grupos por Clustering
+
+```{r}
+#definimos el numero de clusters idoneo mediante el metodo del codo
+fviz_nbclust(assays(se)$counts, kmeans, method = "wss")
+
+# Definir el número de clusters segun el metodo anterior
+k <- 2
+```
+
+Para determinar el número óptimo de **clusters** en los que debemos agrupar nuestras muestras, utilizamos el **método del codo**. Este método se basa en calcular la suma de los cuadrados dentro de los grupos (**within-cluster sum of squares, WSS**) para diferentes valores de **k** y graficar el resultado.
+
+El número óptimo de clusters se identifica en el **"codo"** de la curva, es decir, el punto donde agregar más clusters deja de reducir significativamente la variabilidad dentro de los grupos.
+
+En nuestro caso, observamos que **k = 2** es el valor más adecuado.
+
+```{r}
+set.seed(123)  # Fijar semilla para reproducibilidad
+km <- kmeans(dat.sel, centers = k, iter.max = 1000)
+```
+
+```{r}
+# Agregamos la información del cluster a los datos de PCA
+pca_cluster_df <- data.frame(dat.sel, Cluster = factor(km$cluster), Grupo = factor(se$`Muscle loss`))
+```
+
+### RESULTADOS
+
+### 3.1 Los dos primeros componentes principales explican la mayor parte de la variabilidad de nuestros datos
+
+```{r}
+pc1 <- pca_result$x[,1]
+pc2 <- pca_result$x[,2]
+group <- se$`Muscle loss`
+
+pca_df <- data.frame("PC1" = as.vector(pc1),
+                     "PC2" = as.vector(pc2),
+                     "Group" = group)
+
+p <- ggplot(pca_df, aes(x=PC1, y=PC2)) +
+  geom_point(aes(color=Group)) +
+  # scale_color_manual(c("orange", "blue")) +
+  ggtitle("PCA Caquexia") +
+  labs(x="PC1: 40%",
+       y = "PC2: 8.7%") +
+  theme_bw()
+p
+```
+
+Mostramos en una gráfica de dispersión los dos primeros componentes principales y analizamos cómo se distribuyen los sujetos a lo largo de estos ejes. Diferenciamos a los individuos en función de los dos grupos que tenemos: **control** y **caquexia**.
+
+Podemos observar una cierta tendencia hacia la derecha, lo que sugiere que existe una diferencia significativa entre los grupos. Sin embargo, las variables elegidas para estos componentes no parecen separar completamente ambas condiciones.
+
+Analizando la contribución de las variables en cada componente principal, observamos que la creatinina tiene un alto peso en PC1, lo que indica que influye significativamente en la variabilidad de este componente. En contraste, la acetona tiene un impacto mínimo en PC1.
+
+```{r}
+pca_result$rotation %>% 
+  as.data.frame() %>% 
+  mutate(Variable = row.names(.)) %>% 
+  ggplot(aes(x=PC1, y=reorder(Variable, PC1))) +
+  geom_point() +
+  theme_bw()
+```
+
+Para PC2, el acetato presenta una contribución elevada, mientras que el 2-oxoglutarato apenas afecta a este componente
+
+```{r}
+pca_result$rotation %>% 
+  as.data.frame() %>% 
+  mutate(Variable = row.names(.)) %>% 
+  ggplot(aes(x=PC2, y=reorder(Variable, PC2))) +
+  geom_point() +
+  theme_bw()
+```
+
+### 3.2 El metodo de Clsuterin g k-means aporta diferencia entre la diferencia entre datos
+
+```{r}
+# Graficar los clusters en un scatterplot con ggplot2
+ggplot(pca_cluster_df, aes(x = PC1, y = PC2, color = Cluster)) +
+  geom_point(size = 3) +
+  labs(title = "Clusters basados en PCA", x = "PC1", y = "PC2") +
+  theme_minimal()
+
+```
+
+```{r}
+ggplot(pca_cluster_df, aes(x = PC1, y = PC2, color = Grupo)) +
+  geom_point(size = 3) +
+  labs(title = "Clusters basados en PCA", x = "PC1", y = "PC2") +
+  theme_minimal()
+```
+
+Generamos una gráfica donde los sujetos se distribuyen en función de los dos primeros componentes principales y se agrupan en dos clusters.
+
+Observamos una separación notable en dos grupos, aunque esta no coincide exactamente con la clasificación basada en la presencia de la enfermedad. Sin embargo, sí se detecta una tendencia en la que los sujetos control se asocian más con la parte izquierda del gráfico, mientras que los pacientes con caquexia tienden a ubicarse más a la derecha.
+
+### DISCUSIÓN
+
+\`parece que explican los controls y los pacientes con caquexia. Habria que hacer un analisis mas exhaustivo donde nos basemos en otro tipo de grupos como sexo, estilo de vida, oras patologías, etc.
+
+Podemos observar una cierta tendencia hacia la derecha, lo que sugiere que existe una diferencia significativa entre los grupos. Sin embargo, esta separación no es absoluta, lo que indica que otros factores o componentes podrían estar influyendo en la variabilidad de los datos.
+
+Esto sugiere que los componentes principales capturan cierta diferencia entre los grupos, aunque no de manera completamente alineada con la clasificación clínica.
